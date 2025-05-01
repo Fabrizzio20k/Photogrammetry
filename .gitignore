@@ -174,4 +174,8 @@ cython_debug/
 .pypirc
 
 images/
+images_preprocessed/
+images_segmented/
 *.mp4
+colmap/
+images_masks/
