@@ -1,7 +1,6 @@
 from scripts.extractPhotosFromVideo import extract_frames_from_video
 from scripts.processImage import preprocess_images_for_photogrammetry
 from scripts.segmentation import segment_images_for_photogrammetry
-from scripts.modelVisualizer import visualize_with_pyvista
 from scripts.extractAndMatchFeatures import process_images_with_sift
 
 
@@ -22,13 +21,13 @@ def executor():
     #     output_folder="images_preprocessed"
     # )
 
-    segment_images_for_photogrammetry(
-        input_folder="images_preprocessed",
-        output_folder_segmented="images_segmented",
-        output_folder_mask="images_masks",
-        model_path="models/yolo11m-seg.pt",
-        confidence=0.6,
-        max_workers=1
-    )
+    # segment_images_for_photogrammetry(
+    #     input_folder="images_preprocessed",
+    #     output_folder_segmented="images_segmented",
+    #     output_folder_mask="images_masks",
+    #     model_path="models/yolo11m-seg.pt",
+    #     confidence=0.6,
+    #     max_workers=1
+    # )
 
-    # process_images_with_sift("images_preprocessed")
+    res = process_images_with_sift("images_preprocessed")

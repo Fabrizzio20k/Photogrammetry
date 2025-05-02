@@ -1,7 +1,5 @@
 import os
 import cv2
-import numpy
-import matplotlib.pyplot as plt
 
 
 def process_images_with_sift(image_folder):
@@ -72,26 +70,5 @@ def process_images_with_sift(image_folder):
             }
 
             print(f"Par {pair_key}: {len(good_matches)} buenos emparejamientos")
-
-    if matches_dict:
-        pair_key = list(matches_dict.keys())[0]
-        img1_name, img2_name = pair_key.split('-')
-
-        img1 = images[img1_name]
-        img2 = images[img2_name]
-        kp1 = matches_dict[pair_key]['keypoints1']
-        kp2 = matches_dict[pair_key]['keypoints2']
-        good_matches = matches_dict[pair_key]['matches']
-
-        img_matches = cv2.drawMatches(
-            img1, kp1, img2, kp2, good_matches, None,
-            flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
-        )
-
-        plt.figure(figsize=(15, 8))
-        plt.imshow(cv2.cvtColor(img_matches, cv2.COLOR_BGR2RGB))
-        plt.title(f'Emparejamientos SIFT: {pair_key}')
-        plt.savefig(os.path.join(image_folder, 'sift_matches.jpg'))
-        plt.close()
 
     return matches_dict
