@@ -179,3 +179,4 @@ images_segmented/
 *.mp4
 colmap/
 images_masks/
+.DS_Store
