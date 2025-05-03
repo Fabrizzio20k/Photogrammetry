@@ -180,3 +180,5 @@ images_segmented/
 colmap/
 images_masks/
 .DS_Store
+*.MOV
+reconstruction/
