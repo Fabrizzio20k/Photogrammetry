@@ -58,11 +58,6 @@ def procesar_nube_puntos_alta_calidad(input_ply_path, output_mesh_path, depth=12
         num_puntos = len(pcd.points)
         print(f"Nube cargada con {num_puntos} puntos")
 
-        if num_puntos < 1000:
-            print(
-                "ERROR: La nube tiene muy pocos puntos para generar una malla de calidad")
-            return False
-
         # Analizar dimensiones para verificar escala
         points = np.asarray(pcd.points)
         min_bound = points.min(axis=0)
@@ -123,9 +118,20 @@ def procesar_nube_puntos_alta_calidad(input_ply_path, output_mesh_path, depth=12
         vertices_to_remove = densities < np.quantile(densities, percentil)
         mesh.remove_vertices_by_mask(vertices_to_remove)
 
-        # Aplicar suavizado ligero manteniendo los detalles
-        print("Aplicando suavizado adaptativo...")
-        mesh = mesh.filter_smooth_taubin(number_of_iterations=2)
+        # Con estas líneas:
+        print("Aplicando suavizado adaptativo avanzado...")
+        mesh = mesh.filter_smooth_taubin(number_of_iterations=5,
+                                         lambda_filter=0.5,
+                                         mu=-0.53)
+
+        # Simplificación controlada para mejorar calidad (opcional)
+        num_triangles = len(mesh.triangles)
+        if num_triangles > 500000:  # Si hay demasiados triángulos
+            print(
+                f"Optimizando densidad de malla: {num_triangles} triángulos...")
+            target = max(100000, num_triangles//3)  # No reducir demasiado
+            mesh = mesh.simplify_quadric_decimation(target)
+            print(f"Malla optimizada a {len(mesh.triangles)} triángulos")
 
         # Limpiar y optimizar la malla
         print("Optimizando topología de la malla...")
@@ -169,10 +175,9 @@ def procesar_nube_puntos_alta_calidad(input_ply_path, output_mesh_path, depth=12
         return False
 
 
-def texturizar_alta_calidad(mesh_path, output_path):
+def texturizar_alta_calidad(mesh_path, output_path, dense_folder=None, images_folder=None):
     """
-    Procesa y mejora la malla existente, corrigiendo la orientación de normales
-    y preservando solo los archivos que funcionan
+    Texturiza la malla utilizando COLMAP para mejor calidad
     """
     try:
         print(f"Procesando modelo: {mesh_path}")
@@ -182,121 +187,49 @@ def texturizar_alta_calidad(mesh_path, output_path):
             print(f"ERROR: No se encuentra el archivo de entrada {mesh_path}")
             return False
 
-        # Definir ruta de salida (asegurarse que no sea igual a la entrada)
-        if mesh_path == output_path:
-            output_path = os.path.splitext(
-                output_path)[0] + "_final" + os.path.splitext(output_path)[1]
+        # Verificar si tenemos la carpeta dense necesaria para el texturizado
+        if dense_folder is None or images_folder is None:
+            print("ADVERTENCIA: No se proporcionó carpeta dense o de imágenes.")
+            print("Aplicando texturizado básico sin proyección de imágenes...")
 
-        # Cargar la malla directamente con Open3D
-        print("Cargando y procesando la malla...")
-        mesh = o3d.io.read_triangle_mesh(mesh_path)
+            # Cargamos la malla para el método alternativo
+            mesh = o3d.io.read_triangle_mesh(mesh_path)
 
-        if len(mesh.vertices) == 0 or len(mesh.triangles) == 0:
-            print("ERROR: La malla no contiene geometría válida")
-            return False
-
-        print(
-            f"Malla cargada: {len(mesh.vertices)} vértices, {len(mesh.triangles)} triángulos")
-
-        # Asegurar que la malla tiene normales
-        mesh.compute_vertex_normals()
-
-        # Verificar y corregir orientación de normales
-        print("Verificando orientación de normales...")
-        vertices = np.asarray(mesh.vertices)
-        center = vertices.mean(axis=0)
-        vertex_normals = np.asarray(mesh.vertex_normals)
-
-        # Verificar orientación con una muestra de vértices
-        sample_indices = np.random.choice(
-            len(vertices), min(1000, len(vertices)), replace=False)
-        sample_vertices = vertices[sample_indices]
-        sample_normals = vertex_normals[sample_indices]
-        directions = sample_vertices - center
-        dot_products = np.sum(sample_normals * directions, axis=1)
-
-        # Si la mayoría de normales apuntan hacia adentro, invertirlas
-        if np.mean(dot_products) < 0:
-            print("CORRIGIENDO: Las normales están invertidas, reorientando...")
-            # Invertir triángulos para cambiar orientación
-            mesh.triangles = o3d.utility.Vector3iVector(
-                np.asarray(mesh.triangles)[:, ::-1]
-            )
-            # Recalcular normales
+            # Asegurar que la malla tiene normales y colores básicos
             mesh.compute_vertex_normals()
-            print("Normales reorientadas correctamente")
-
-        # Asegurar que la malla tiene colores si es necesario
-        if not mesh.has_vertex_colors():
-            print("Aplicando colores básicos a la malla...")
-            try:
-                # Intentar usar colores de la nube de puntos si está disponible
-                pcd = o3d.io.read_point_cloud(mesh_path)
-                if pcd.has_colors():
-                    print("Transfiriendo colores desde la nube de puntos...")
-                    # Crear un KDTree con los puntos
-                    pcd_tree = o3d.geometry.KDTreeFlann(pcd)
-
-                    # Para cada vértice en la malla, encontrar el punto más cercano
-                    mesh_vertices = np.asarray(mesh.vertices)
-                    vertex_colors = []
-
-                    for vertex in mesh_vertices:
-                        k, idx, _ = pcd_tree.search_knn_vector_3d(vertex, 1)
-                        if k > 0:
-                            # Obtener el color del punto más cercano
-                            color = np.asarray(pcd.colors)[idx[0]]
-                            vertex_colors.append(color)
-                        else:
-                            # Color predeterminado si no hay coincidencia
-                            vertex_colors.append([0.7, 0.7, 0.7])  # Gris
-
-                    # Asignar colores a la malla
-                    mesh.vertex_colors = o3d.utility.Vector3dVector(
-                        np.array(vertex_colors))
-                    print("Colores transferidos exitosamente")
-                else:
-                    # Aplicar un color uniforme si no hay colores de origen
-                    print("Aplicando color uniforme...")
-                    vertices_color = np.ones(
-                        (len(mesh.vertices), 3)) * 0.7  # Gris claro
-                    mesh.vertex_colors = o3d.utility.Vector3dVector(
-                        vertices_color)
-            except Exception as color_error:
-                print(f"Error al aplicar colores: {color_error}")
-                # Aplicar un color uniforme como fallback
-                print("Aplicando color uniforme...")
+            if not mesh.has_vertex_colors():
                 vertices_color = np.ones(
                     (len(mesh.vertices), 3)) * 0.7  # Gris claro
                 mesh.vertex_colors = o3d.utility.Vector3dVector(vertices_color)
 
-        # Guardar la malla procesada directamente en la ruta de salida final
-        print(f"Guardando modelo final en: {output_path}")
-        success = o3d.io.write_triangle_mesh(
-            output_path,
-            mesh,
-            write_vertex_colors=True,
-            write_vertex_normals=True
-        )
+            # Guardar directamente
+            o3d.io.write_triangle_mesh(output_path, mesh)
+            return True
 
-        if not success or not os.path.exists(output_path):
-            print("ERROR: No se pudo guardar el modelo final")
-            return False
+        # Crear directorio temporal para texturizado
+        texture_workspace = os.path.join(
+            os.path.dirname(output_path), "texture_workspace")
+        os.makedirs(texture_workspace, exist_ok=True)
 
-        print(f"Modelo guardado exitosamente en: {output_path}")
-        print(f"Dimensiones del modelo:")
-        bbox = mesh.get_axis_aligned_bounding_box()
-        min_bound = bbox.min_bound
-        max_bound = bbox.max_bound
-        dimensions = max_bound - min_bound
-        print(f"- X: {dimensions[0]:.2f}")
-        print(f"- Y: {dimensions[1]:.2f}")
-        print(f"- Z: {dimensions[2]:.2f}")
+        # Usar COLMAP para el texturizado de alta calidad
+        print("Ejecutando texturizado con COLMAP (alta resolución)...")
+        subprocess.run([
+            "colmap", "texture_mapping",
+            "--workspace_path", dense_folder,
+            "--input_path", mesh_path,
+            "--output_path", output_path,
+            "--TextureMapping.resolution", "4096",  # Resolución más alta
+            "--TextureMapping.geometric_consistency", "1",
+            "--TextureMapping.ghosting_weight", "10",
+            "--TextureMapping.global_seam_leveling", "1",
+            "--TextureMapping.local_seam_leveling", "1"
+        ], check=True)
 
+        print(f"Texturizado completado: {output_path}")
         return True
 
     except Exception as e:
-        print(f"ERROR en el proceso: {e}")
+        print(f"ERROR en el proceso de texturizado: {e}")
         import traceback
         traceback.print_exc()
         return False

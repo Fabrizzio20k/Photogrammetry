@@ -35,7 +35,7 @@ def reconstruir_con_colmap_completo(images_folder, output_folder):
         "colmap", "feature_extractor",
         "--database_path", database_path,
         "--image_path", images_folder,
-        "--ImageReader.camera_model", "SIMPLE_RADIAL",
+        "--ImageReader.camera_model", "RADIAL",
         "--ImageReader.single_camera", "1",
         "--SiftExtraction.use_gpu", "0",
         "--SiftExtraction.max_num_features", "16384",
@@ -66,6 +66,32 @@ def reconstruir_con_colmap_completo(images_folder, output_folder):
         "--Mapper.ba_global_max_num_iterations", "50",
         "--Mapper.ba_local_max_num_iterations", "30",
     ], check=True)
+
+    # AÑADIR AQUÍ: Refinamiento adicional con bundle adjuster
+    print("Refinando posiciones de cámaras con bundle adjustment...")
+    # Buscar el modelo reconstruido (generalmente en sparse/0)
+    reconstructed_model = None
+    if os.path.exists(os.path.join(sparse_folder, "0")):
+        reconstructed_model = os.path.join(sparse_folder, "0")
+    else:
+        reconstructions = [f for f in os.listdir(sparse_folder)
+                           if os.path.isdir(os.path.join(sparse_folder, f))]
+        if reconstructions:
+            reconstructed_model = os.path.join(
+                sparse_folder, reconstructions[0])
+
+    if reconstructed_model:
+        # Ejecutar bundle adjustment para refinamiento adicional
+        subprocess.run([
+            "colmap", "bundle_adjuster",
+            "--input_path", reconstructed_model,
+            "--output_path", reconstructed_model,
+            "--BundleAdjustment.max_num_iterations", "100",
+            "--BundleAdjustment.refine_focal_length", "1",
+            "--BundleAdjustment.refine_principal_point", "1",
+            "--BundleAdjustment.refine_extra_params", "1"
+        ], check=True)
+        print("Refinamiento de cámaras completado")
 
     # Verificar reconstrucción
     reconstruction_path = None
@@ -136,13 +162,23 @@ def completar_fotogrametria(sparse_folder, images_folder, output_folder):
         "--output_type", "COLMAP"
     ], check=True)
 
-    # 2. Compute dense depth maps
-    print("Calculando mapas de profundidad...")
+    # Con estas líneas mejoradas:
+    print("Calculando mapas de profundidad de alta precisión...")
     subprocess.run([
         "colmap", "patch_match_stereo",
         "--workspace_path", dense_folder,
         "--workspace_format", "COLMAP",
-        "--PatchMatchStereo.geom_consistency", "1"
+        "--PatchMatchStereo.geom_consistency", "1",
+        "--PatchMatchStereo.max_image_size", "3200",  # Mayor resolución
+        "--PatchMatchStereo.window_radius", "5",      # Mejor precisión
+        "--PatchMatchStereo.window_step", "1",        # Paso más fino
+        "--PatchMatchStereo.filter", "1",             # Filtrado mejorado
+        # Más permisivo para capturar más detalles
+        "--PatchMatchStereo.filter_min_ncc", "0.1",
+        # Ángulo mínimo más pequeño
+        "--PatchMatchStereo.filter_min_triangulation_angle", "3.0",
+        # Usar más memoria para mejor rendimiento
+        "--PatchMatchStereo.cache_size", "32"
     ], check=True)
 
     # 3. Generate dense point cloud
