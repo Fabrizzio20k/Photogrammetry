@@ -1,9 +1,8 @@
 from scripts.extractPhotosFromVideo import extract_frames_from_video
 from scripts.processImage import preprocess_images_for_photogrammetry
 from scripts.segmentation import segment_images_for_photogrammetry
-from scripts.extractAndMatchFeatures import process_images_with_sift
-from scripts.colmap import colmap_reconstruction_from_sift
-from scripts.densify import sparse_to_dense_with_open3d
+from scripts.densify import reconstruir_con_colmap_completo
+from scripts.texture import meshAndTexture
 
 
 def executor():
@@ -23,22 +22,23 @@ def executor():
     #     output_folder="images_preprocessed"
     # )
 
-    # segment_images_for_photogrammetry(
-    #     input_folder="images_preprocessed",
-    #     output_folder_segmented="images_segmented",
-    #     output_folder_mask="images_masks",
-    #     model_path="models/yolo11l-seg.pt",
-    #     confidence=0.2,
-    #     max_workers=1
-    # )
+    segment_images_for_photogrammetry(
+        input_folder="images_preprocessed",
+        output_folder_segmented="images_preprocessed",
+        output_folder_mask="images_masks",
+        model_path="models/yolo11l-seg.pt",
+        confidence=0.2,
+        max_workers=1
+    )
 
-    colmap_reconstruction_from_sift(
-        images_folder="images_preprocessed",
+    reconstruir_con_colmap_completo(
+        images_folder="images_segmented",
         output_folder="reconstruction",
     )
-    # dense_pcd, mesh = sparse_to_dense_with_open3d(
-    #     sparse_model_path="reconstruction/sparse/0",
-    #     output_folder="reconstruction/dense",
-    #     dense_points=500000,
-    #     poisson_depth=10
-    # )
+
+    meshAndTexture(
+        fused_ply_path="reconstruction/dense/fused.ply",
+        output_folder="reconstruction/mesh_textured",
+        dense_folder="reconstruction/dense",
+        depth=12
+    )

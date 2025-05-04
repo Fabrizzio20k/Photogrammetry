@@ -1,103 +1,174 @@
 import os
-import numpy as np
-import open3d as o3d
-import time
+import subprocess
+from shutil import rmtree
 
 
-def sparse_to_dense_with_open3d(sparse_model_path, output_folder, dense_points=500000, poisson_depth=9):
+def reconstruir_con_colmap_completo(images_folder, output_folder):
     """
-    Convierte nube de puntos dispersa de COLMAP a densa usando Open3D
-
-    Args:
-        sparse_model_path: Ruta a la reconstrucción dispersa de COLMAP
-        output_folder: Carpeta donde guardar los resultados
-        dense_points: Número de puntos en la nube densa
-        poisson_depth: Profundidad para reconstrucción Poisson (8-10 recomendado)
-
-    Returns:
-        Nube de puntos densa y malla
+    Realiza una reconstrucción completa con COLMAP usando todos sus pasos
     """
+    if os.path.exists(output_folder):
+        rmtree(output_folder)
     os.makedirs(output_folder, exist_ok=True)
 
-    start_time = time.time()
-    print("Convirtiendo nube de puntos COLMAP a Open3D...")
+    # Crear subcarpetas
+    sparse_folder = os.path.join(output_folder, "sparse")
+    dense_folder = os.path.join(output_folder, "dense")
+    os.makedirs(sparse_folder, exist_ok=True)
+    os.makedirs(dense_folder, exist_ok=True)
 
-    # Cargar puntos 3D de COLMAP
-    points3D_path = os.path.join(sparse_model_path, "points3D.txt")
-    if not os.path.exists(points3D_path):
-        print(
-            f"Error: No se encontró el archivo de puntos 3D en {points3D_path}")
-        return None, None
+    database_path = os.path.join(output_folder, "database.db")
 
-    # Parsear puntos 3D
-    points = []
-    colors = []
+    # Eliminar base de datos si existe
+    if os.path.exists(database_path):
+        os.remove(database_path)
 
-    with open(points3D_path, 'r') as f:
-        lines = f.readlines()
+    # 1. Crear base de datos
+    print("Creando base de datos COLMAP...")
+    subprocess.run(["colmap", "database_creator",
+                    "--database_path", database_path],
+                   check=True)
 
-        # Saltar líneas de cabecera
-        if lines and lines[0].startswith("#"):
-            lines = lines[2:]  # Saltar las dos primeras líneas
+    # 2. Extraer características con parámetros más permisivos
+    print("Extrayendo características...")
+    subprocess.run([
+        "colmap", "feature_extractor",
+        "--database_path", database_path,
+        "--image_path", images_folder,
+        "--ImageReader.camera_model", "SIMPLE_RADIAL",
+        "--ImageReader.single_camera", "1",
+        "--SiftExtraction.use_gpu", "0",
+        "--SiftExtraction.max_num_features", "16384",
+        "--SiftExtraction.first_octave", "-1",
+    ], check=True)
 
-        for line in lines:
-            parts = line.strip().split()
-            if len(parts) >= 7:
-                # Formato: POINT3D_ID, X, Y, Z, R, G, B, ...
-                x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
-                r, g, b = int(parts[4]), int(parts[5]), int(parts[6])
+    # 3. Hacer matching con exhaustive_matcher
+    print("Realizando matching de características...")
+    subprocess.run([
+        "colmap", "exhaustive_matcher",
+        "--database_path", database_path,
+        "--SiftMatching.use_gpu", "0",
+        "--SiftMatching.guided_matching", "1",
+        "--SiftMatching.max_ratio", "0.85",
+        "--SiftMatching.max_num_matches", "32768",
+    ], check=True)
 
-                points.append([x, y, z])
-                colors.append([r/255.0, g/255.0, b/255.0])
+    # 4. Mapper con parámetros más permisivos pero no demasiado
+    print("Ejecutando triangulación con COLMAP...")
+    subprocess.run([
+        "colmap", "mapper",
+        "--database_path", database_path,
+        "--image_path", images_folder,
+        "--output_path", sparse_folder,
+        "--Mapper.min_num_matches", "10",
+        "--Mapper.init_min_num_inliers", "10",
+        "--Mapper.abs_pose_min_inlier_ratio", "0.15",
+        "--Mapper.ba_global_max_num_iterations", "50",
+        "--Mapper.ba_local_max_num_iterations", "30",
+    ], check=True)
 
-    if not points:
-        print("No se pudieron cargar puntos 3D.")
-        return None, None
+    # Verificar reconstrucción
+    reconstruction_path = None
+    if os.path.exists(os.path.join(sparse_folder, "0")):
+        reconstruction_path = os.path.join(sparse_folder, "0")
+    else:
+        reconstructions = [f for f in os.listdir(sparse_folder)
+                           if os.path.isdir(os.path.join(sparse_folder, f))]
+        if reconstructions:
+            reconstruction_path = os.path.join(
+                sparse_folder, reconstructions[0])
 
-    print(f"Cargados {len(points)} puntos 3D de la reconstrucción dispersa")
+    if reconstruction_path:
+        # Verificar que realmente contiene puntos 3D
+        points3D_path = os.path.join(reconstruction_path, "points3D.bin")
+        if not os.path.exists(points3D_path):
+            points3D_path = os.path.join(reconstruction_path, "points3D.txt")
 
-    # Crear nube de puntos Open3D
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(np.array(points))
-    pcd.colors = o3d.utility.Vector3dVector(np.array(colors))
+        if os.path.exists(points3D_path) and os.path.getsize(points3D_path) > 0:
+            print(f"Reconstrucción sparse exitosa en {reconstruction_path}")
 
-    # Guardar nube de puntos dispersa
-    sparse_path = os.path.join(output_folder, "sparse.ply")
-    o3d.io.write_point_cloud(sparse_path, pcd)
-    print(f"Nube de puntos dispersa guardada en {sparse_path}")
+            # Completamos el proceso con la función de completar_fotogrametria
+            completar_fotogrametria(
+                sparse_folder, images_folder, output_folder)
 
-    # Estimar normales
-    print("Estimando normales...")
-    pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(
-        radius=0.1, max_nn=30))
-    pcd.orient_normals_consistent_tangent_plane(k=30)
+            return reconstruction_path
+        else:
+            print(
+                f"La reconstrucción en {reconstruction_path} no contiene puntos 3D válidos")
 
-    # Aplicar reconstrucción Poisson
-    print(f"Aplicando reconstrucción Poisson (profundidad={poisson_depth})...")
-    mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-        pcd, depth=poisson_depth, width=0, scale=1.1, linear_fit=False)
+    print("No se pudo generar una reconstrucción con puntos 3D")
+    return None
 
-    # Muestrear puntos densos de la malla
-    print(f"Muestreando {dense_points} puntos de la malla...")
-    dense_pcd = mesh.sample_points_poisson_disk(
-        number_of_points=dense_points, init_factor=5)
 
-    # Filtrar outliers
-    print("Filtrando outliers...")
-    dense_pcd, _ = dense_pcd.remove_statistical_outlier(
-        nb_neighbors=20, std_ratio=2.0)
+def completar_fotogrametria(sparse_folder, images_folder, output_folder):
+    """
+    Completa el proceso de fotogrametría a partir de una reconstrucción sparse existente
+    """
+    # Encontrar la reconstrucción sparse
+    if os.path.exists(os.path.join(sparse_folder, "0")):
+        reconstruction_path = os.path.join(sparse_folder, "0")
+    else:
+        reconstructions = [f for f in os.listdir(sparse_folder)
+                           if os.path.isdir(os.path.join(sparse_folder, f))]
+        if reconstructions:
+            reconstruction_path = os.path.join(
+                sparse_folder, reconstructions[0])
+        else:
+            print("No se encontró reconstrucción sparse.")
+            return False
 
-    # Guardar resultados
-    dense_path = os.path.join(output_folder, "dense.ply")
-    o3d.io.write_point_cloud(dense_path, dense_pcd)
+    # Crear carpetas necesarias
+    dense_folder = os.path.join(output_folder, "dense")
+    mesh_folder = os.path.join(output_folder, "mesh")
+    textured_folder = os.path.join(output_folder, "textured")
 
-    mesh_path = os.path.join(output_folder, "mesh.ply")
-    o3d.io.write_triangle_mesh(mesh_path, mesh)
+    os.makedirs(dense_folder, exist_ok=True)
+    os.makedirs(mesh_folder, exist_ok=True)
+    os.makedirs(textured_folder, exist_ok=True)
 
-    elapsed_time = time.time() - start_time
-    print(
-        f"Proceso de densificación completado en {elapsed_time:.2f} segundos")
-    print(f"Nube de puntos densa guardada en {dense_path}")
-    print(f"Malla guardada en {mesh_path}")
+    # 1. Undistort images
+    print("Preparando imágenes para reconstrucción densa...")
+    subprocess.run([
+        "colmap", "image_undistorter",
+        "--image_path", images_folder,
+        "--input_path", reconstruction_path,
+        "--output_path", dense_folder,
+        "--output_type", "COLMAP"
+    ], check=True)
 
-    return dense_pcd, mesh
+    # 2. Compute dense depth maps
+    print("Calculando mapas de profundidad...")
+    subprocess.run([
+        "colmap", "patch_match_stereo",
+        "--workspace_path", dense_folder,
+        "--workspace_format", "COLMAP",
+        "--PatchMatchStereo.geom_consistency", "1"
+    ], check=True)
+
+    # 3. Generate dense point cloud
+    print("Fusionando mapas de profundidad en nube de puntos densa...")
+    fused_ply_path = os.path.join(dense_folder, "fused.ply")
+    subprocess.run([
+        "colmap", "stereo_fusion",
+        "--workspace_path", dense_folder,
+        "--workspace_format", "COLMAP",
+        "--input_type", "geometric",
+        "--output_path", fused_ply_path
+    ], check=True)
+
+    # 4. Convertir sparse model a PLY también (pero no imprimir esto)
+    sparse_ply_path = os.path.join(output_folder, "sparse.ply")
+    subprocess.run([
+        "colmap", "model_converter",
+        "--input_path", reconstruction_path,
+        "--output_path", sparse_ply_path,
+        "--output_type", "PLY"
+    ], check=True)
+
+    # En lugar de imprimir información sobre el sparse model,
+    # ahora solo imprimos información sobre el modelo denso
+    print(f"Reconstrucción completa con éxito!")
+    print(f"Nube de puntos densa generada en: {fused_ply_path}")
+    print(f"Este archivo puede ser abierto directamente en MeshLab o CloudCompare para visualización y procesamiento adicional.")
+
+    return True
