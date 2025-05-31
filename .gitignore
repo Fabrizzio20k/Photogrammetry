@@ -182,3 +182,5 @@ images_masks/
 .DS_Store
 *.MOV
 reconstruction/
+frames_output/
+data/
