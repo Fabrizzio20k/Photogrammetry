@@ -1,3 +1,4 @@
+import time
 import subprocess
 import os
 import zipfile
@@ -6,6 +7,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
 from fastapi.responses import JSONResponse
 from utils.extractPhotosFromVideo import extract_frames_smart
 from utils.segmentImages import segment_images_for_photogrammetry
+from fastapi.responses import FileResponse
 
 app = FastAPI()
 
@@ -74,14 +76,12 @@ async def generate():
 async def run_photogrammetry_pipeline():
     """Ejecutar el pipeline completo de fotogrametría"""
 
-    # Verificar que existe el directorio de imágenes
     if not os.path.exists("/data/images"):
         raise HTTPException(
             status_code=400,
             detail="Directorio /data/images no encontrado. Sube las imágenes primero."
         )
 
-    # Verificar que hay imágenes
     images = [f for f in os.listdir(
         "/data/images") if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
     if not images:
@@ -91,13 +91,13 @@ async def run_photogrammetry_pipeline():
         )
 
     pipeline_steps = []
+    start_time = time.time()
 
     try:
-        # Crear directorios necesarios
         os.makedirs("/data/sparse", exist_ok=True)
         os.makedirs("/data/dense", exist_ok=True)
 
-        # 1. COLMAP: Detección de características SIFT
+        step_start = time.time()
         pipeline_steps.append("1. Extrayendo características SIFT...")
         cmd = [
             "colmap", "feature_extractor",
@@ -106,11 +106,12 @@ async def run_photogrammetry_pipeline():
             "--SiftExtraction.use_gpu", "1"
         ]
         result = run_command(cmd, timeout=600)
+        print(f"Paso 1 completado en {time.time() - step_start:.2f} segundos")
         if not result["success"]:
             raise Exception(
                 f"Error en extracción de características: {result.get('stderr', result.get('error'))}")
 
-        # 2. COLMAP: Emparejamiento de características
+        step_start = time.time()
         pipeline_steps.append("2. Emparejando características...")
         cmd = [
             "colmap", "exhaustive_matcher",
@@ -118,11 +119,12 @@ async def run_photogrammetry_pipeline():
             "--SiftMatching.use_gpu", "1"
         ]
         result = run_command(cmd, timeout=600)
+        print(f"Paso 2 completado en {time.time() - step_start:.2f} segundos")
         if not result["success"]:
             raise Exception(
                 f"Error en emparejamiento: {result.get('stderr', result.get('error'))}")
 
-        # 3. COLMAP: Reconstrucción SfM
+        step_start = time.time()
         pipeline_steps.append("3. Ejecutando reconstrucción SfM...")
         cmd = [
             "colmap", "mapper",
@@ -131,11 +133,12 @@ async def run_photogrammetry_pipeline():
             "--output_path", "/data/sparse"
         ]
         result = run_command(cmd, timeout=1200)
+        print(f"Paso 3 completado en {time.time() - step_start:.2f} segundos")
         if not result["success"]:
             raise Exception(
                 f"Error en reconstrucción SfM: {result.get('stderr', result.get('error'))}")
 
-        # 4. COLMAP: Creando imágenes sin distorsión
+        step_start = time.time()
         pipeline_steps.append("4. Creando imágenes sin distorsión...")
         cmd = [
             "colmap", "image_undistorter",
@@ -145,11 +148,12 @@ async def run_photogrammetry_pipeline():
             "--output_type", "COLMAP"
         ]
         result = run_command(cmd, timeout=600)
+        print(f"Paso 4 completado en {time.time() - step_start:.2f} segundos")
         if not result["success"]:
             raise Exception(
                 f"Error en undistorter: {result.get('stderr', result.get('error'))}")
 
-        # 5. COLMAP: Conversión de modelo a formato de texto
+        step_start = time.time()
         pipeline_steps.append("5. Convirtiendo modelo a texto...")
         cmd = [
             "colmap", "model_converter",
@@ -158,11 +162,12 @@ async def run_photogrammetry_pipeline():
             "--output_type", "TXT"
         ]
         result = run_command(cmd, timeout=300)
+        print(f"Paso 5 completado en {time.time() - step_start:.2f} segundos")
         if not result["success"]:
             raise Exception(
                 f"Error en conversión: {result.get('stderr', result.get('error'))}")
 
-        # 6. OpenMVS: Conversión de COLMAP a MVS
+        step_start = time.time()
         pipeline_steps.append("6. Convirtiendo COLMAP a MVS...")
         cmd = [
             "/usr/local/bin/OpenMVS/InterfaceCOLMAP",
@@ -171,35 +176,44 @@ async def run_photogrammetry_pipeline():
             "--image-folder", "/data/dense/images"
         ]
         result = run_command(cmd, timeout=300)
+        print(f"Paso 6 completado en {time.time() - step_start:.2f} segundos")
         if not result["success"]:
             raise Exception(
                 f"Error en InterfaceCOLMAP: {result.get('stderr', result.get('error'))}")
 
-        # 7. OpenMVS: Densificación de la nube de puntos
+        step_start = time.time()
         pipeline_steps.append("7. Densificando nube de puntos...")
         cmd = [
             "/usr/local/bin/OpenMVS/DensifyPointCloud",
             "-i", "/data/scene.mvs",
-            "-o", "/data/scene_dense.mvs"
+            "-o", "/data/scene_dense.mvs",
+            "--resolution-level", "2",
         ]
-        result = run_command(cmd, timeout=1800)  # 30 minutos
+        result = run_command(cmd, timeout=1800)
+        print(f"Paso 7 completado en {time.time() - step_start:.2f} segundos")
         if not result["success"]:
             raise Exception(
                 f"Error en densificación: {result.get('stderr', result.get('error'))}")
 
-        # 8. OpenMVS: Reconstrucción de malla
+        step_start = time.time()
         pipeline_steps.append("8. Reconstruyendo malla...")
         cmd = [
             "/usr/local/bin/OpenMVS/ReconstructMesh",
             "-i", "/data/scene_dense.mvs",
-            "-o", "/data/scene_mesh.mvs"
+            "-o", "/data/scene_mesh.mvs",
+            "--max-threads", "24",
+            # Reducir malla al 50% (default: 1 = sin reducción)
+            "--decimate", "0.5",
+            "--target-face-num", "100000",
         ]
-        result = run_command(cmd, timeout=1200)
+        result = run_command(cmd, timeout=60)
+        print(f"Paso 8 completado en {time.time() - step_start:.2f} segundos")
         if not result["success"]:
             raise Exception(
                 f"Error en reconstrucción de malla: {result.get('stderr', result.get('error'))}")
 
-        # 9. OpenMVS: Texturización de malla
+        # Paso 9: TextureMesh CORREGIDO Y OPTIMIZADO
+        step_start = time.time()
         pipeline_steps.append("9. Texturizando malla...")
         cmd = [
             "/usr/local/bin/OpenMVS/TextureMesh",
@@ -207,46 +221,39 @@ async def run_photogrammetry_pipeline():
             "-m", "/data/scene_mesh.ply",
             "-o", "/data/scene_textured.mvs",
             "--export-type", "obj",
-            "--resolution-level", "0"
+            "--resolution-level", "1",
+            "--max-threads", "24",
         ]
-        result = run_command(cmd, timeout=900)
+        # 1 minuto de timeout para texturización
+        result = run_command(cmd, timeout=60)
+        print(f"Paso 9 completado en {time.time() - step_start:.2f} segundos")
         if not result["success"]:
             raise Exception(
                 f"Error en texturización: {result.get('stderr', result.get('error'))}")
 
-        # Verificar archivos generados antes de comprimir
         files_to_compress = []
         required_files = ["scene_textured.obj", "scene_textured.mtl"]
-
-        # Verificar archivos requeridos
         for file in required_files:
             if os.path.exists(f"/data/{file}"):
                 files_to_compress.append(file)
 
-        # Buscar archivos de textura (.jpg, .png)
         texture_files = [f for f in os.listdir(
             "/data") if f.lower().endswith(('.jpg', '.jpeg', '.png')) and 'texture' in f.lower()]
         files_to_compress.extend(texture_files)
 
-        # Crear ZIP con los archivos finales
-        import zipfile
         zip_filename = "/data/photogrammetry_result.zip"
-
         if files_to_compress:
             with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for file in files_to_compress:
                     file_path = f"/data/{file}"
                     if os.path.exists(file_path):
                         zipf.write(file_path, file)
-
             zip_size = os.path.getsize(zip_filename)
         else:
             zip_size = 0
 
-        # Limpiar archivos temporales (mantener solo ZIP e images)
         pipeline_steps.append("10. Limpiando archivos temporales...")
         files_to_keep = ["images", "photogrammetry_result.zip"]
-
         for item in os.listdir("/data"):
             item_path = f"/data/{item}"
             if item not in files_to_keep:
@@ -254,14 +261,18 @@ async def run_photogrammetry_pipeline():
                     if os.path.isfile(item_path):
                         os.remove(item_path)
                     elif os.path.isdir(item_path):
-                        import shutil
                         shutil.rmtree(item_path)
                 except Exception as e:
                     print(f"Error eliminando {item}: {e}")
 
+        total_time = time.time() - start_time
+        print(f"Pipeline completo en {total_time:.2f} segundos")
+
         return {
             "success": True,
             "message": "Pipeline de fotogrametría completado exitosamente",
+            "download_ready": True,
+            "download_url": "/download/photogrammetry_result.zip",
             "steps_completed": pipeline_steps,
             "images_processed": len(images),
             "zip_file": {
@@ -269,7 +280,8 @@ async def run_photogrammetry_pipeline():
                 "size_bytes": zip_size,
                 "contains": files_to_compress
             },
-            "files_cleaned": True
+            "files_cleaned": True,
+            "execution_time_seconds": round(total_time, 2)
         }
 
     except Exception as e:
@@ -279,7 +291,11 @@ async def run_photogrammetry_pipeline():
                 "success": False,
                 "error": str(e),
                 "steps_completed": pipeline_steps,
-                "message": "Pipeline falló durante la ejecución"
+                "message": "Pipeline falló durante la ejecución",
+                "error_details": {
+                    "message": str(e),
+                    "traceback": str(e.__traceback__) if hasattr(e, '__traceback__') else "No traceback available"
+                }
             }
         )
 
@@ -378,3 +394,16 @@ async def extract_frames_from_video(video: UploadFile = File(...), num_frames: i
             status_code=500,
             detail=f"Error extrayendo frames: {str(e)}"
         )
+
+
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+    file_path = f"/data/{filename}"
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="application/zip"
+    )
