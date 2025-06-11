@@ -15,9 +15,9 @@ https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install
 docker build -t api .
 ```
 
-### Luego, ejecute el archivo run.sh
+### Luego, ejecute el docker
 ```bash
-sh run.sh
+docker-compose up
 ```
 
 ### Finalmente, abra su navegador y vaya a la siguiente URL
