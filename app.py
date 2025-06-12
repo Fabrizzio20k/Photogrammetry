@@ -29,49 +29,6 @@ def run_command(cmd, timeout=300):
         return {"success": False, "error": str(e)}
 
 
-@app.get("/processvideo")
-async def process_video():
-    return JSONResponse(
-        status_code=200,
-        content={
-            "success": True,
-            "message": "Endpoint /processvideo está activo. Implementación pendiente."
-        }
-    )
-
-
-@app.post("/generate")
-async def generate():
-    try:
-        # Comando básico de COLMAP para verificar que funciona
-        result = subprocess.run(
-            ["colmap", "database_creator", "--database_path", "/data/test.db"],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-
-        if result.returncode == 0:
-            return {
-                "success": True,
-                "message": "COLMAP funcionando correctamente",
-                "output": result.stdout
-            }
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "success": False,
-                    "error": result.stderr
-                }
-            )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail={"success": False, "error": str(e)}
-        )
-
-
 @app.post("/photogrammetry")
 async def run_photogrammetry_pipeline():
     """Ejecutar el pipeline completo de fotogrametría"""
@@ -407,3 +364,57 @@ async def download_file(filename: str):
         filename=filename,
         media_type="application/zip"
     )
+
+
+@app.post("/uploadPhotos")
+async def upload_photos(zip_file: UploadFile = File(...)):
+    """Sube un archivo ZIP con fotos y las guarda en /data/images"""
+
+    if not zip_file.filename.endswith('.zip'):
+        raise HTTPException(
+            status_code=400, detail="El archivo debe ser un .zip que contenga imágenes")
+    try:
+        if os.path.exists("/data"):
+            shutil.rmtree("/data")
+        os.makedirs("/data/images", exist_ok=True)
+
+        zip_path = f"/data/{zip_file.filename}"
+        with open(zip_path, "wb") as f:
+            content = await zip_file.read()
+            f.write(content)
+
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall("/data/images")
+
+        os.remove(zip_path)
+
+        extracted_files = os.listdir("/data/images")
+        image_files = [
+            f for f in extracted_files
+            if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+        ]
+
+        if not image_files:
+            raise HTTPException(
+                status_code=400,
+                detail="El archivo .zip no contiene imágenes válidas (.jpg, .jpeg, .png)"
+            )
+
+        return {
+            "success": True,
+            "message": "Fotos subidas y extraídas exitosamente",
+            "total_files": len(extracted_files),
+            "image_files_count": len(image_files),
+            "image_filenames": image_files
+        }
+
+    except zipfile.BadZipFile:
+        raise HTTPException(
+            status_code=400,
+            detail="El archivo no es un ZIP válido"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error procesando el archivo: {str(e)}"
+        )
