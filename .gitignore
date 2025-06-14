@@ -184,3 +184,4 @@ images_masks/
 reconstruction/
 frames_output/
 data/
+.DS_Store
