@@ -4,7 +4,7 @@ Fotogrametria en python acelerado por gpu
 # Requisitos
 - Docker
 - NVIDIA Container Toolkit
-- NVIDIA GPU con soporte para CUDA
+- NVIDIA GPU con soporte para CUDA 12.0 o superior
 
 Para instalar lo necesario, ya sea en windows WSL2 o en linux, siga las instrucciones de la siguiente URL:
 https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
