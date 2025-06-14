@@ -310,16 +310,14 @@ def segment_images_for_photogrammetry(input_folder, output_folder_segmented=None
                     cv2.MORPH_ELLIPSE, (5, 5))
                 mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_large)
 
-                # Create 4-channel image (BGRA) with alpha channel
-                segmented_image = cv2.cvtColor(
-                    original_image, cv2.COLOR_BGR2BGRA)
-                segmented_image[:, :, 3] = mask * 255
+                segmented_image = np.zeros_like(original_image)
+                segmented_image[mask == 1] = original_image[mask == 1]
 
                 base_name = os.path.basename(img_path)
                 file_name, file_ext = os.path.splitext(base_name)
 
                 segmented_path = os.path.join(
-                    output_folder_segmented, f"seg_{file_name}.png")
+                    output_folder_segmented, f"seg_{file_name}.jpg")
                 mask_path = os.path.join(
                     output_folder_mask, f"mask_{base_name}")
 

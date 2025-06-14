@@ -3,10 +3,9 @@ import subprocess
 import os
 import zipfile
 import shutil
-from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse
 from utils.extractPhotosFromVideo import extract_frames_smart
-from utils.segmentImages import segment_images_for_photogrammetry
 from fastapi.responses import FileResponse
 
 app = FastAPI()
@@ -366,55 +365,151 @@ async def download_file(filename: str):
     )
 
 
-@app.post("/uploadPhotos")
-async def upload_photos(zip_file: UploadFile = File(...)):
-    """Sube un archivo ZIP con fotos y las guarda en /data/images"""
+@app.post("/uploadphotos")
+async def upload_photos_from_zip(photos_zip: UploadFile = File(...), segment_objects: bool = False):
+    """Subir fotos desde un archivo ZIP y opcionalmente segmentarlas"""
 
-    if not zip_file.filename.endswith('.zip'):
+    # Verificar que el archivo sea un ZIP
+    if not photos_zip.filename.lower().endswith('.zip'):
         raise HTTPException(
-            status_code=400, detail="El archivo debe ser un .zip que contenga imágenes")
+            status_code=400,
+            detail="El archivo debe ser un ZIP"
+        )
+
+    # Crear directorio /data si no existe
+    os.makedirs("/data", exist_ok=True)
+
+    # Eliminar carpetas existentes si existen
+    if os.path.exists("/data/images"):
+        shutil.rmtree("/data/images")
+    if os.path.exists("/data/images_segmented"):
+        shutil.rmtree("/data/images_segmented")
+    if os.path.exists("/data/images_masks"):
+        shutil.rmtree("/data/images_masks")
+
+    # Guardar el archivo ZIP temporalmente
+    zip_path = f"/data/{photos_zip.filename}"
+    with open(zip_path, "wb") as buffer:
+        content = await photos_zip.read()
+        buffer.write(content)
+
     try:
-        if os.path.exists("/data"):
-            shutil.rmtree("/data")
-        os.makedirs("/data/images", exist_ok=True)
+        # Crear carpeta temporal para extraer las fotos
+        temp_extract_folder = "/data/photos_temp"
+        os.makedirs(temp_extract_folder, exist_ok=True)
 
-        zip_path = f"/data/{zip_file.filename}"
-        with open(zip_path, "wb") as f:
-            content = await zip_file.read()
-            f.write(content)
-
+        # Extraer el ZIP
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall("/data/images")
+            zip_ref.extractall(temp_extract_folder)
 
-        os.remove(zip_path)
+        # Buscar todas las imágenes válidas recursivamente
+        valid_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif')
+        extracted_images = []
 
-        extracted_files = os.listdir("/data/images")
-        image_files = [
-            f for f in extracted_files
-            if f.lower().endswith(('.jpg', '.jpeg', '.png'))
-        ]
+        for root, dirs, files in os.walk(temp_extract_folder):
+            for file in files:
+                if file.lower().endswith(valid_extensions):
+                    extracted_images.append(os.path.join(root, file))
 
-        if not image_files:
+        if not extracted_images:
             raise HTTPException(
                 status_code=400,
-                detail="El archivo .zip no contiene imágenes válidas (.jpg, .jpeg, .png)"
+                detail="No se encontraron imágenes válidas en el ZIP"
             )
+
+        # Crear carpeta /data/images y copiar las imágenes
+        os.makedirs("/data/images", exist_ok=True)
+
+        # Copiar imágenes a /data/images con nombres secuenciales
+        copied_images = []
+        for i, img_path in enumerate(extracted_images):
+            # Obtener extensión original
+            _, ext = os.path.splitext(img_path)
+            # Crear nombre secuencial
+            new_name = f"image_{i+1:04d}{ext}"
+            dest_path = f"/data/images/{new_name}"
+            shutil.copy2(img_path, dest_path)
+            copied_images.append(new_name)
+
+        # Limpiar archivos temporales
+        os.remove(zip_path)
+        shutil.rmtree(temp_extract_folder)
+
+        # Procesar segmentación si está habilitada
+        if segment_objects:
+            try:
+                from utils.segmentImages import segment_images_for_photogrammetry
+                segmented_paths, mask_paths = segment_images_for_photogrammetry(
+                    input_folder="/data/images",
+                    output_folder_segmented="/data/images_segmented",
+                    output_folder_mask="/data/images_masks",
+                    model_path="/app/models/yolo11l-seg.pt",
+                    confidence=0.3,
+                    max_workers=1,
+                    min_area_ratio=0.08,
+                    use_adaptive_confidence=True,
+                    prefer_centered_objects=True
+                )
+
+                if segmented_paths:
+                    # Reemplazar imágenes originales con las segmentadas
+                    shutil.rmtree("/data/images")
+                    os.rename("/data/images_segmented", "/data/images")
+                    if os.path.exists("/data/images_masks"):
+                        shutil.rmtree("/data/images_masks")
+
+                    segmentation_info = {
+                        "segmented": True,
+                        "segmented_images": len(segmented_paths),
+                        "original_images": len(copied_images)
+                    }
+                else:
+                    segmentation_info = {
+                        "segmented": False,
+                        "reason": "No se pudieron segmentar objetos válidos",
+                        "fallback_to_original": True
+                    }
+            except Exception as seg_error:
+                segmentation_info = {
+                    "segmented": False,
+                    "error": str(seg_error),
+                    "fallback_to_original": True
+                }
+        else:
+            segmentation_info = {
+                "segmented": False,
+                "reason": "Segmentación deshabilitada por parámetro"
+            }
+
+        # Contar imágenes finales
+        final_images = [f for f in os.listdir("/data/images")
+                        if f.lower().endswith(valid_extensions)]
 
         return {
             "success": True,
-            "message": "Fotos subidas y extraídas exitosamente",
-            "total_files": len(extracted_files),
-            "image_files_count": len(image_files),
-            "image_filenames": image_files
+            "message": "Fotos subidas exitosamente",
+            "images_uploaded": len(copied_images),
+            "segmentation_info": segmentation_info,
+            "images_processed": len(final_images),
+            "output_folder": "/data/images",
+            "supported_formats": list(valid_extensions)
         }
 
     except zipfile.BadZipFile:
+        # Limpiar archivo temporal en caso de error
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
         raise HTTPException(
             status_code=400,
             detail="El archivo no es un ZIP válido"
         )
     except Exception as e:
+        # Limpiar archivos temporales en caso de error
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        if os.path.exists("/data/photos_temp"):
+            shutil.rmtree("/data/photos_temp")
         raise HTTPException(
             status_code=500,
-            detail=f"Error procesando el archivo: {str(e)}"
+            detail=f"Error procesando el ZIP: {str(e)}"
         )
