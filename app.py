@@ -7,8 +7,17 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse
 from utils.extractPhotosFromVideo import extract_frames_smart
 from fastapi.responses import FileResponse
+import cv2
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def run_command(cmd, timeout=300):
@@ -26,6 +35,26 @@ def run_command(cmd, timeout=300):
         return {"success": False, "error": "Comando excedió tiempo límite"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def reduce_image_resolution(image_path, reduction_percentage):
+    """Reducir la resolución de una imagen usando OpenCV"""
+    if reduction_percentage <= 0:
+        return
+
+    img = cv2.imread(image_path)
+    if img is None:
+        return
+
+    height, width = img.shape[:2]
+    scale_factor = 1 - (reduction_percentage / 100)
+    new_width = int(width * scale_factor)
+    new_height = int(height * scale_factor)
+
+    if new_width > 0 and new_height > 0:
+        resized_img = cv2.resize(
+            img, (new_width, new_height), interpolation=cv2.INTER_AREA)
+        cv2.imwrite(image_path, resized_img)
 
 
 @app.post("/photogrammetry")
@@ -159,10 +188,10 @@ async def run_photogrammetry_pipeline():
             "-o", "/data/scene_mesh.mvs",
             "--max-threads", "24",
             # Reducir malla al 50% (default: 1 = sin reducción)
-            "--decimate", "0.5",
+            "--decimate", "0.4",
             "--target-face-num", "100000",
         ]
-        result = run_command(cmd, timeout=60)
+        result = run_command(cmd, timeout=100)
         print(f"Paso 8 completado en {time.time() - step_start:.2f} segundos")
         if not result["success"]:
             raise Exception(
@@ -366,20 +395,17 @@ async def download_file(filename: str):
 
 
 @app.post("/uploadphotos")
-async def upload_photos_from_zip(photos_zip: UploadFile = File(...), segment_objects: bool = False):
+async def upload_photos_from_zip(photos_zip: UploadFile = File(...), segment_objects: bool = False, reduction_percentage: int = 0):
     """Subir fotos desde un archivo ZIP y opcionalmente segmentarlas"""
 
-    # Verificar que el archivo sea un ZIP
     if not photos_zip.filename.lower().endswith('.zip'):
         raise HTTPException(
             status_code=400,
             detail="El archivo debe ser un ZIP"
         )
 
-    # Crear directorio /data si no existe
     os.makedirs("/data", exist_ok=True)
 
-    # Eliminar carpetas existentes si existen
     if os.path.exists("/data/images"):
         shutil.rmtree("/data/images")
     if os.path.exists("/data/images_segmented"):
@@ -387,22 +413,18 @@ async def upload_photos_from_zip(photos_zip: UploadFile = File(...), segment_obj
     if os.path.exists("/data/images_masks"):
         shutil.rmtree("/data/images_masks")
 
-    # Guardar el archivo ZIP temporalmente
     zip_path = f"/data/{photos_zip.filename}"
     with open(zip_path, "wb") as buffer:
         content = await photos_zip.read()
         buffer.write(content)
 
     try:
-        # Crear carpeta temporal para extraer las fotos
         temp_extract_folder = "/data/photos_temp"
         os.makedirs(temp_extract_folder, exist_ok=True)
 
-        # Extraer el ZIP
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(temp_extract_folder)
 
-        # Buscar todas las imágenes válidas recursivamente
         valid_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif')
         extracted_images = []
 
@@ -417,25 +439,24 @@ async def upload_photos_from_zip(photos_zip: UploadFile = File(...), segment_obj
                 detail="No se encontraron imágenes válidas en el ZIP"
             )
 
-        # Crear carpeta /data/images y copiar las imágenes
         os.makedirs("/data/images", exist_ok=True)
 
-        # Copiar imágenes a /data/images con nombres secuenciales
         copied_images = []
         for i, img_path in enumerate(extracted_images):
-            # Obtener extensión original
             _, ext = os.path.splitext(img_path)
-            # Crear nombre secuencial
             new_name = f"image_{i+1:04d}{ext}"
             dest_path = f"/data/images/{new_name}"
             shutil.copy2(img_path, dest_path)
             copied_images.append(new_name)
 
-        # Limpiar archivos temporales
         os.remove(zip_path)
         shutil.rmtree(temp_extract_folder)
 
-        # Procesar segmentación si está habilitada
+        if reduction_percentage > 0:
+            for img_file in copied_images:
+                img_path = os.path.join("/data/images", img_file)
+                reduce_image_resolution(img_path, reduction_percentage)
+
         if segment_objects:
             try:
                 from utils.segmentImages import segment_images_for_photogrammetry
@@ -452,7 +473,6 @@ async def upload_photos_from_zip(photos_zip: UploadFile = File(...), segment_obj
                 )
 
                 if segmented_paths:
-                    # Reemplazar imágenes originales con las segmentadas
                     shutil.rmtree("/data/images")
                     os.rename("/data/images_segmented", "/data/images")
                     if os.path.exists("/data/images_masks"):
@@ -481,7 +501,6 @@ async def upload_photos_from_zip(photos_zip: UploadFile = File(...), segment_obj
                 "reason": "Segmentación deshabilitada por parámetro"
             }
 
-        # Contar imágenes finales
         final_images = [f for f in os.listdir("/data/images")
                         if f.lower().endswith(valid_extensions)]
 
@@ -491,12 +510,12 @@ async def upload_photos_from_zip(photos_zip: UploadFile = File(...), segment_obj
             "images_uploaded": len(copied_images),
             "segmentation_info": segmentation_info,
             "images_processed": len(final_images),
+            "reduction_percentage": reduction_percentage,
             "output_folder": "/data/images",
             "supported_formats": list(valid_extensions)
         }
 
     except zipfile.BadZipFile:
-        # Limpiar archivo temporal en caso de error
         if os.path.exists(zip_path):
             os.remove(zip_path)
         raise HTTPException(
@@ -504,7 +523,6 @@ async def upload_photos_from_zip(photos_zip: UploadFile = File(...), segment_obj
             detail="El archivo no es un ZIP válido"
         )
     except Exception as e:
-        # Limpiar archivos temporales en caso de error
         if os.path.exists(zip_path):
             os.remove(zip_path)
         if os.path.exists("/data/photos_temp"):
