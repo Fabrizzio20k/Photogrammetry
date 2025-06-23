@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  openmvs-api:
+    build: .
+    container_name: openmvs-container
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app.py:/app/app.py
+      - ./utils:/app/utils
+      - ./models:/app/models
+      - ./requirements.txt:/app/requirements.txt
+      - ./data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - PYTHONPATH=/app
+      - NVIDIA_VISIBLE_DEVICES=all
+    restart: unless-stopped
+    command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+
+    stdin_open: true
+    tty: true
