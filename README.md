@@ -688,8 +688,7 @@ Este proyecto está licenciado bajo la Licencia GNU. Ver el archivo `LICENSE` pa
 
 ## 👥 Equipo de Desarrollo
 
-**Mantenedor Principal**: [Tu Nombre]
-**Contribuidores**: Ver `CONTRIBUTORS.md`
+**Ver** `CONTRIBUTORS.md`
 
 Para soporte técnico o consultas: [email de contacto]
 
