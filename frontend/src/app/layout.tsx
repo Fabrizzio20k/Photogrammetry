@@ -13,8 +13,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Photogrammetry Interface",
+  title: "REALFUSSION - Photogrammetry Processing",
   description: "A web interface for photogrammetry processing",
+  icons: {
+    icon: "/icon.ico",
+  }
 };
 
 export default function RootLayout({

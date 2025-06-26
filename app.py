@@ -1,3 +1,4 @@
+import base64
 import time
 import subprocess
 import os
@@ -6,9 +7,12 @@ import shutil
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse
 from utils.extractPhotosFromVideo import extract_frames_smart
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 import cv2
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List
+import numpy as np
 
 app = FastAPI()
 app.add_middleware(
@@ -20,8 +24,11 @@ app.add_middleware(
 )
 
 
+class PhotoSelectionRequest(BaseModel):
+    selected_photos: List[str]
+
+
 def run_command(cmd, timeout=300):
-    """Ejecutar comando y retornar resultado"""
     try:
         result = subprocess.run(cmd, capture_output=True,
                                 text=True, timeout=timeout, cwd="/data")
@@ -38,7 +45,6 @@ def run_command(cmd, timeout=300):
 
 
 def reduce_image_resolution(image_path, reduction_percentage):
-    """Reducir la resolución de una imagen usando OpenCV"""
     if reduction_percentage <= 0:
         return
 
@@ -57,10 +63,88 @@ def reduce_image_resolution(image_path, reduction_percentage):
         cv2.imwrite(image_path, resized_img)
 
 
+@app.get("/photos")
+async def get_photos():
+    if not os.path.exists("/data/images"):
+        return {
+            "success": False,
+            "message": "No hay fotos disponibles",
+            "photos": []
+        }
+
+    photos = [f for f in os.listdir(
+        "/data/images") if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'))]
+
+    photo_info = []
+    for photo in photos:
+        photo_path = f"/data/images/{photo}"
+        if os.path.exists(photo_path):
+            file_size = os.path.getsize(photo_path)
+            photo_info.append({
+                "filename": photo,
+                "size": file_size,
+                "url": f"/photo/{photo}"
+            })
+
+    return {
+        "success": True,
+        "photos": photo_info,
+        "total_count": len(photo_info)
+    }
+
+
+@app.get("/photo/{filename}")
+async def get_photo(filename: str):
+    file_path = f"/data/images/{filename}"
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Foto no encontrada")
+
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="image/*"
+    )
+
+
+@app.post("/photos/select")
+async def select_photos(request: PhotoSelectionRequest):
+    if not os.path.exists("/data/images"):
+        raise HTTPException(
+            status_code=400,
+            detail="No hay directorio de imágenes disponible"
+        )
+
+    all_photos = [f for f in os.listdir(
+        "/data/images") if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'))]
+    selected_photos = request.selected_photos
+    photos_to_delete = [
+        photo for photo in all_photos if photo not in selected_photos]
+
+    deleted_count = 0
+    for photo in photos_to_delete:
+        photo_path = f"/data/images/{photo}"
+        if os.path.exists(photo_path):
+            try:
+                os.remove(photo_path)
+                deleted_count += 1
+            except Exception as e:
+                print(f"Error eliminando {photo}: {e}")
+
+    remaining_photos = [f for f in os.listdir(
+        "/data/images") if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'))]
+
+    return {
+        "success": True,
+        "message": f"Selección completada. {deleted_count} fotos eliminadas.",
+        "deleted_count": deleted_count,
+        "remaining_count": len(remaining_photos),
+        "selected_photos": selected_photos,
+        "remaining_photos": remaining_photos
+    }
+
+
 @app.post("/photogrammetry")
 async def run_photogrammetry_pipeline():
-    """Ejecutar el pipeline completo de fotogrametría"""
-
     if not os.path.exists("/data/images"):
         raise HTTPException(
             status_code=400,
@@ -187,7 +271,6 @@ async def run_photogrammetry_pipeline():
             "-i", "/data/scene_dense.mvs",
             "-o", "/data/scene_mesh.mvs",
             "--max-threads", "24",
-            # Reducir malla al 50% (default: 1 = sin reducción)
             "--decimate", "0.4",
             "--target-face-num", "100000",
         ]
@@ -197,7 +280,6 @@ async def run_photogrammetry_pipeline():
             raise Exception(
                 f"Error en reconstrucción de malla: {result.get('stderr', result.get('error'))}")
 
-        # Paso 9: TextureMesh CORREGIDO Y OPTIMIZADO
         step_start = time.time()
         pipeline_steps.append("9. Texturizando malla...")
         cmd = [
@@ -209,7 +291,6 @@ async def run_photogrammetry_pipeline():
             "--resolution-level", "1",
             "--max-threads", "24",
         ]
-        # 1 minuto de timeout para texturización
         result = run_command(cmd, timeout=60)
         print(f"Paso 9 completado en {time.time() - step_start:.2f} segundos")
         if not result["success"]:
@@ -396,8 +477,6 @@ async def download_file(filename: str):
 
 @app.post("/uploadphotos")
 async def upload_photos_from_zip(photos_zip: UploadFile = File(...), segment_objects: bool = False, reduction_percentage: int = 0):
-    """Subir fotos desde un archivo ZIP y opcionalmente segmentarlas"""
-
     if not photos_zip.filename.lower().endswith('.zip'):
         raise HTTPException(
             status_code=400,

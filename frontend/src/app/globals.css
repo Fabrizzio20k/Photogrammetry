@@ -1,6 +1,21 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* Temporal para debugging */
+.debug-image {
+  background: red !important;
+  min-height: 200px !important;
+  border: 3px solid lime !important;
+}
+
+.debug-image img {
+  filter: none !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  display: block !important;
+  background: blue !important;
+}
+
 @theme {
   --color-background: #ffffff;
   --color-foreground: #0f172a;
