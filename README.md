@@ -36,7 +36,7 @@ La funcionalidad de segmentación inteligente representa uno de los avances más
 
 ## 🏗️ Arquitectura del Sistema
 
-![Pipeline Overview](docs/a11.png)
+![Pipeline Overview](docs/a1.png)
 
 ### Stack Tecnológico
 
