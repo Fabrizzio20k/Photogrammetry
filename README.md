@@ -13,7 +13,9 @@ Este proyecto revoluciona el proceso tradicional de fotogrametría mediante la i
 
 La funcionalidad de segmentación inteligente representa uno de los avances más significativos del sistema:
 
-![Segmentation Comparison](images/segmentation_comparison.png)
+![Segmentation Comparison](docs/i2.png)
+
+![Segmentation Comparison](docs/i3.png)
 
 **🎯 Eliminación de Superficies de Apoyo**
 - Detecta y elimina automáticamente mesas, soportes, y otras superficies donde se coloca el objeto
@@ -30,13 +32,11 @@ La funcionalidad de segmentación inteligente representa uno de los avances más
 - Minimiza puntos 3D espurios provenientes del fondo
 - Mejora la densidad y calidad de la malla resultante
 
-![Clean Model Example](images/clean_model_example.png)
-
 ---
 
 ## 🏗️ Arquitectura del Sistema
 
-![Pipeline Overview](docs/a1.png)
+![Pipeline Overview](docs/a11.png)
 
 ### Stack Tecnológico
 
@@ -104,8 +104,6 @@ Proceso de densificación y generación de malla:
 
 Sistema avanzado de detección y segmentación para eliminar elementos no deseados:
 
-![YOLO Segmentation Process](images/yolo_segmentation.png)
-
 **a) Detección de Objetos**
 - Red neuronal convolucional en tiempo real
 - Detección de múltiples clases de objetos
@@ -116,8 +114,6 @@ Sistema avanzado de detección y segmentación para eliminar elementos no desead
 - **Eliminación automática de superficies de apoyo**: Detecta y remueve mesas, soportes, pedestales
 - **Separación inteligente de fondos**: Maneja fondos complejos con texturas y patrones
 - Algoritmos de post-procesamiento morfológico para refinar bordes
-
-![Object Isolation Example](images/object_isolation.png)
 
 **c) Selección de Objeto Principal Optimizada para 3D**
 - Métricas de importancia específicas para fotogrametría:
@@ -134,7 +130,7 @@ Sistema avanzado de detección y segmentación para eliminar elementos no desead
 - Reducción significativa de artefactos en la malla
 - Texturas más limpias sin interferencias del entorno
 
-![Before After Segmentation](images/before_after_segmentation.png)
+![Before After Segmentation](docs/i4.png)
 
 ### 4. Análisis de Calidad de Frames
 
@@ -251,7 +247,7 @@ npm run dev
    API Docs: http://localhost:8000/docs
    ```
 
-![Web Interface Screenshot](images/web_interface.png)
+![Web Interface Screenshot](docs/i5.png)
 
 2. **Modalidades de Entrada**
 
@@ -261,29 +257,29 @@ npm run dev
 - **Opción de Segmentación**: Activa la separación automática del objeto principal
 - El sistema analiza calidad, extrae los mejores frames y opcionalmente segmenta objetos
 
-![Video Upload Interface](images/video_upload.png)
+![Video Upload Interface](docs/i6.png)
 
 #### 📁 Modo ZIP de Imágenes  
 - Carga un archivo ZIP con tu colección de fotografías
 - **Control de Resolución**: Reduce la resolución (0-50%) para acelerar el procesamiento
 - **Opción de Segmentación**: Elimina fondos y superficies de apoyo automáticamente
 - Ideal para colecciones fotográficas profesionales ya capturadas
+- **Selector de images**: Permite elegir imágenes específicas dentro del ZIP antes de procesar
 
-![ZIP Upload Interface](images/zip_upload.png)
+![ZIP Upload Interface](docs/i7.png)
+![Processing Progress](docs/i8.png)
 
 3. **Configuración de Parámetros**
    - **Segmentación**: ON/OFF según si deseas eliminación automática de fondos
    - **Reducción de Calidad**: 0% (máxima calidad) a 50% (máxima velocidad)
    - **Número de Frames**: Automático o especificado manualmente
 
-![Parameter Configuration](images/parameter_config.png)
-
 4. **Ejecución y Monitoreo**
    - Visualización en tiempo real del progreso del pipeline
    - Métricas de calidad y estadísticas de procesamiento
    - Descarga automática del modelo 3D resultante
 
-![Processing Progress](images/processing_progress.png)
+
 
 ### API REST
 
@@ -301,8 +297,6 @@ curl -X POST "http://localhost:8000/extractframes" \
 - `video`: Archivo de video (MP4, AVI, MOV, MKV, etc.)
 - `num_frames`: Número objetivo de frames (automático si se omite)
 - `segment_objects`: **Activar segmentación para eliminar superficies de apoyo y fondos**
-
-![API Video Processing](images/api_video_processing.png)
 
 **Ventajas de la Segmentación en Video:**
 - Elimina automáticamente la mesa o superficie donde está el objeto
@@ -326,8 +320,6 @@ curl -X POST "http://localhost:8000/uploadphotos" \
   - `0%`: Máxima calidad, mayor tiempo de procesamiento
   - `20%`: Balance óptimo calidad-velocidad
   - `50%`: Máxima velocidad, menor calidad final
-
-![API ZIP Processing](images/api_zip_processing.png)
 
 **Optimización Calidad-Velocidad:**
 - **Sin Reducción (0%)**: Modelos de máxima resolución, tiempo completo
@@ -378,8 +370,6 @@ extract_frames_smart(
 )
 ```
 
-![Frame Extraction Analysis](images/frame_extraction_analysis.png)
-
 #### Segmentación de Objetos para Fotogrametría
 ```python
 # En utils/segmentImages.py
@@ -392,8 +382,6 @@ segment_images_for_photogrammetry(
     remove_support_surfaces=True  # Eliminar mesas y soportes
 )
 ```
-
-![Segmentation Parameters](images/segmentation_parameters.png)
 
 #### Control de Calidad vs Velocidad
 ```python
@@ -416,8 +404,6 @@ scenarios = {
     }
 }
 ```
-
-![Quality Speed Tradeoff](images/quality_speed_tradeoff.png)
 
 #### Pipeline COLMAP/OpenMVS
 ```bash
@@ -461,8 +447,6 @@ texturing: 60s              # 1 minuto
 
 El sistema proporciona métricas detalladas para evaluar la calidad del proceso:
 
-![Quality Metrics Dashboard](images/quality_metrics.png)
-
 #### Análisis de Frames (Modo Video)
 - **Nitidez**: Varianza del Laplaciano (>100 recomendado)
 - **Contraste**: Desviación estándar (>30 recomendado)
@@ -476,8 +460,6 @@ El sistema proporciona métricas detalladas para evaluar la calidad del proceso:
 - **Área del Objeto**: Ratio del objeto respecto a la imagen total (8-60% óptimo)
 - **Centralidad**: Posición del objeto en la imagen (>70% para mejores resultados)
 - **Limpieza del Fondo**: Efectividad en la eliminación de elementos distractores
-
-![Segmentation Success Rate](images/segmentation_success.png)
 
 #### Reconstrucción 3D
 - **Número de Features**: Puntos SIFT detectados por imagen
@@ -585,8 +567,6 @@ segment_objects=false
 # Verificar que el objeto esté centrado en las imágenes
 prefer_centered_objects=true
 ```
-
-![Segmentation Troubleshooting](images/segmentation_troubleshooting.png)
 
 #### 5. Optimización de Velocidad vs Calidad
 ```bash
