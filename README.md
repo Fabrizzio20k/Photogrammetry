@@ -1,8 +1,7 @@
 # 📸 REALFUSSION - Fotogrametría acelerada por gpu
+![Pipeline Overview](docs/i1.png)
 
 Un sistema completo de fotogrametría acelerado por GPU que transforma videos o colecciones de fotografías en modelos 3D precisos y texturizados. Diseñado para eliminar automáticamente superficies de apoyo y fondos no deseados, generando modelos 3D limpios del objeto de interés.
-
-![Pipeline Overview](docs/a1aa.png)
 
 ---
 

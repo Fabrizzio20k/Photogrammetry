@@ -65,11 +65,6 @@ export default function PhotogrammetryInterface() {
     return (
         <div className="min-h-screen bg-gray-50">
             <div className="container mx-auto p-6 max-w-4xl">
-                <div className="text-center mb-8">
-                    <h1 className="text-4xl font-bold text-gray-900 mb-2">Fotogrametría 3D</h1>
-                    <p className="text-lg text-gray-600">Convierte fotos o videos en modelos 3D</p>
-                </div>
-
                 {!mode ? (
                     <ModeSelector onModeSelect={setMode} />
                 ) : (
