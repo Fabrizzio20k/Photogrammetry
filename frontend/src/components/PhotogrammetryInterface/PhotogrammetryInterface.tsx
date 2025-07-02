@@ -19,6 +19,8 @@ export default function PhotogrammetryInterface() {
         selectedPhotos,
         showPhotoSelection,
         config,
+        meshStats,
+        textureInfo,
         setMode,
         setUploadedFile,
         setMessage,
@@ -46,6 +48,8 @@ export default function PhotogrammetryInterface() {
         return (
             <CompletedView
                 message={message}
+                meshStats={meshStats}
+                textureInfo={textureInfo}
                 onDownload={downloadResult}
                 onReset={reset}
             />

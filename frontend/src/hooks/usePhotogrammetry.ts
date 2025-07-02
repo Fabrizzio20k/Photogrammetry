@@ -11,6 +11,8 @@ export function usePhotogrammetry() {
     const [photos, setPhotos] = useState<Photo[]>([])
     const [selectedPhotos, setSelectedPhotos] = useState<Set<string>>(new Set())
     const [showPhotoSelection, setShowPhotoSelection] = useState(false)
+    const [meshStats, setMeshStats] = useState(null)
+    const [textureInfo, setTextureInfo] = useState(null)
     const [config, setConfig] = useState<Config>({
         numFrames: 60,
         segmentObjects: false,
@@ -133,6 +135,15 @@ export function usePhotogrammetry() {
                     clearInterval(progressInterval)
                     setProgress(100)
                     setDownloadUrl(result.download_url)
+
+                    // Guardar estadísticas del mesh
+                    if (result.mesh_statistics) {
+                        setMeshStats(result.mesh_statistics)
+                    }
+                    if (result.texture_info) {
+                        setTextureInfo(result.texture_info)
+                    }
+
                     setStep('completed')
                     setMessage('¡Proceso completado! Tu modelo 3D está listo para descargar.')
                 } else {
@@ -188,6 +199,8 @@ export function usePhotogrammetry() {
         setPhotos([])
         setSelectedPhotos(new Set())
         setShowPhotoSelection(false)
+        setMeshStats(null)
+        setTextureInfo(null)
         setConfig({
             numFrames: 60,
             segmentObjects: false,
@@ -207,6 +220,8 @@ export function usePhotogrammetry() {
         selectedPhotos,
         showPhotoSelection,
         config,
+        meshStats,
+        textureInfo,
         // Acciones
         setMode,
         setUploadedFile,
