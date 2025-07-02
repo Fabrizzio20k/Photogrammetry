@@ -24,6 +24,97 @@ app.add_middleware(
 )
 
 
+def extract_mesh_statistics(obj_file_path):
+    """
+    Extrae estadísticas básicas de un archivo OBJ
+    """
+    if not os.path.exists(obj_file_path):
+        return None
+
+    vertices = 0
+    faces = 0
+    texture_coords = 0
+    normals = 0
+
+    try:
+        with open(obj_file_path, 'r') as file:
+            for line in file:
+                line = line.strip()
+                if line.startswith('v '):  # Vertex
+                    vertices += 1
+                elif line.startswith('f '):  # Face
+                    faces += 1
+                elif line.startswith('vt '):  # Texture coordinate
+                    texture_coords += 1
+                elif line.startswith('vn '):  # Vertex normal
+                    normals += 1
+
+        # Calcular triángulos (la mayoría de faces en fotogrametría son triángulos)
+        triangles = faces  # Asumir que cada face es un triángulo
+
+        # Calcular tamaño del archivo
+        file_size_bytes = os.path.getsize(obj_file_path)
+        file_size_mb = file_size_bytes / (1024 * 1024)
+
+        return {
+            "vertices": vertices,
+            "faces": faces,
+            "triangles": triangles,  # Generalmente faces = triangles en fotogrametría
+            "texture_coordinates": texture_coords,
+            "vertex_normals": normals,
+            "file_size_bytes": file_size_bytes,
+            "file_size_mb": round(file_size_mb, 2)
+        }
+
+    except Exception as e:
+        print(f"Error leyendo estadísticas del mesh: {e}")
+        return None
+
+
+def get_texture_files_info(data_folder):
+    """
+    Obtiene información sobre los archivos de textura
+    """
+    texture_files = [f for f in os.listdir(data_folder)
+                     if f.lower().endswith(('.jpg', '.jpeg', '.png')) and 'texture' in f.lower()]
+
+    texture_info = []
+    total_texture_size = 0
+
+    for texture_file in texture_files:
+        texture_path = os.path.join(data_folder, texture_file)
+        if os.path.exists(texture_path):
+            size_bytes = os.path.getsize(texture_path)
+            total_texture_size += size_bytes
+
+            # Obtener dimensiones de la textura
+            try:
+                import cv2
+                img = cv2.imread(texture_path)
+                if img is not None:
+                    height, width = img.shape[:2]
+                    texture_info.append({
+                        "filename": texture_file,
+                        "size_bytes": size_bytes,
+                        "size_mb": round(size_bytes / (1024 * 1024), 2),
+                        "width": width,
+                        "height": height,
+                        "resolution": f"{width}x{height}"
+                    })
+            except:
+                texture_info.append({
+                    "filename": texture_file,
+                    "size_bytes": size_bytes,
+                    "size_mb": round(size_bytes / (1024 * 1024), 2)
+                })
+
+    return {
+        "texture_files": texture_info,
+        "total_textures": len(texture_files),
+        "total_texture_size_mb": round(total_texture_size / (1024 * 1024), 2)
+    }
+
+
 class PhotoSelectionRequest(BaseModel):
     selected_photos: List[str]
 
@@ -318,6 +409,9 @@ async def run_photogrammetry_pipeline():
         else:
             zip_size = 0
 
+        mesh_stats = extract_mesh_statistics("/data/scene_textured.obj")
+        texture_info = get_texture_files_info("/data")
+
         pipeline_steps.append("10. Limpiando archivos temporales...")
         files_to_keep = ["images", "photogrammetry_result.zip"]
         for item in os.listdir("/data"):
@@ -346,6 +440,8 @@ async def run_photogrammetry_pipeline():
                 "size_bytes": zip_size,
                 "contains": files_to_compress
             },
+            "mesh_statistics": mesh_stats,  # NUEVO
+            "texture_info": texture_info,   # NUEVO
             "files_cleaned": True,
             "execution_time_seconds": round(total_time, 2)
         }
@@ -538,17 +634,24 @@ async def upload_photos_from_zip(photos_zip: UploadFile = File(...), segment_obj
 
         if segment_objects:
             try:
-                from utils.segmentImages import segment_images_for_photogrammetry
-                segmented_paths, mask_paths = segment_images_for_photogrammetry(
+                # from utils.segmentImages import segment_images_for_photogrammetry
+                # segmented_paths, mask_paths = segment_images_for_photogrammetry(
+                #     input_folder="/data/images",
+                #     output_folder_segmented="/data/images_segmented",
+                #     output_folder_mask="/data/images_masks",
+                #     model_path="/app/models/yolo11l-seg.pt",
+                #     confidence=0.2,
+                #     max_workers=1,
+                #     min_area_ratio=0.08,
+                #     use_adaptive_confidence=True,
+                #     prefer_centered_objects=True
+                # )
+                from utils.segmentImages import segment_images_for_photogrammetry_improved
+                segmented_paths, mask_paths = segment_images_for_photogrammetry_improved(
                     input_folder="/data/images",
                     output_folder_segmented="/data/images_segmented",
                     output_folder_mask="/data/images_masks",
                     model_path="/app/models/yolo11l-seg.pt",
-                    confidence=0.3,
-                    max_workers=1,
-                    min_area_ratio=0.08,
-                    use_adaptive_confidence=True,
-                    prefer_centered_objects=True
                 )
 
                 if segmented_paths:

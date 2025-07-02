@@ -6,6 +6,7 @@ from tqdm import tqdm
 from ultralytics import YOLO
 from concurrent.futures import ThreadPoolExecutor
 from shutil import rmtree
+from collections import Counter
 
 
 def segment_images_for_photogrammetry(input_folder, output_folder_segmented=None, output_folder_mask=None,
@@ -364,3 +365,238 @@ def segment_images_for_photogrammetry(input_folder, output_folder_segmented=None
     print(f"✓ Máscaras guardadas en: {output_folder_mask}")
 
     return segmented_paths, mask_paths
+
+
+def preprocess_image_for_detection(image):
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+
+    enhanced = cv2.merge([l, a, b])
+    enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+    kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+    enhanced = cv2.filter2D(enhanced, -1, kernel)
+
+    return enhanced
+
+
+def calculate_object_centrality(bbox, image_shape):
+    h, w = image_shape[:2]
+    center_x, center_y = w // 2, h // 2
+
+    x1, y1, x2, y2 = bbox
+    obj_center_x = (x1 + x2) / 2
+    obj_center_y = (y1 + y2) / 2
+
+    distance = np.sqrt((obj_center_x - center_x)**2 +
+                       (obj_center_y - center_y)**2)
+    max_distance = np.sqrt(center_x**2 + center_y**2)
+
+    centrality = 1 - (distance / max_distance)
+    return centrality
+
+
+def calculate_object_compactness(mask):
+    contours, _ = cv2.findContours(mask.astype(
+        np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return 0
+
+    main_contour = max(contours, key=cv2.contourArea)
+    area = cv2.contourArea(main_contour)
+    perimeter = cv2.arcLength(main_contour, True)
+
+    if perimeter == 0:
+        return 0
+
+    compactness = 4 * np.pi * area / (perimeter * perimeter)
+    return compactness
+
+
+def filter_background_objects(detections, image_shape):
+    filtered = []
+    h, w = image_shape[:2]
+
+    for detection in detections:
+        bbox = detection['bbox']
+        x1, y1, x2, y2 = bbox
+
+        obj_w = x2 - x1
+        obj_h = y2 - y1
+
+        is_edge_object = (x1 < w * 0.02 and y1 < h * 0.02 and
+                          x2 > w * 0.98 and y2 > h * 0.98)
+
+        aspect_ratio = obj_w / obj_h if obj_h > 0 else 0
+        is_background_like = (aspect_ratio > 3 or aspect_ratio < 0.3)
+
+        area_ratio = (obj_w * obj_h) / (w * h)
+        is_too_large = area_ratio > 0.85
+
+        if not (is_edge_object or is_background_like or is_too_large):
+            filtered.append(detection)
+
+    return filtered
+
+
+def select_best_object(detections, image_shape):
+    if not detections:
+        return None
+
+    if len(detections) == 1:
+        return detections[0]
+
+    scores = []
+    for detection in detections:
+        confidence = detection['confidence']
+        centrality = calculate_object_centrality(
+            detection['bbox'], image_shape)
+        compactness = calculate_object_compactness(detection['mask'])
+
+        area_ratio = detection['area_ratio']
+        area_score = 1 - abs(area_ratio - 0.3) / 0.7 if area_ratio <= 1 else 0
+
+        final_score = (confidence * 0.3 +
+                       centrality * 0.35 +
+                       compactness * 0.2 +
+                       area_score * 0.15)
+
+        scores.append(final_score)
+
+    best_idx = np.argmax(scores)
+    return detections[best_idx]
+
+
+def segment_single_object_adaptive(image_path, model, confidence_levels=[0.3, 0.2, 0.15, 0.1, 0.08]):
+    original_image = cv2.imread(image_path)
+    if original_image is None:
+        return None, None
+
+    enhanced_image = preprocess_image_for_detection(original_image)
+    h, w = original_image.shape[:2]
+
+    for confidence in confidence_levels:
+        results = model(enhanced_image, conf=confidence, iou=0.7, max_det=100)
+
+        if not results or not results[0].masks:
+            continue
+
+        detections = []
+        masks = results[0].masks.data.cpu().numpy()
+        boxes = results[0].boxes.xyxy.cpu().numpy()
+        confidences = results[0].boxes.conf.cpu().numpy()
+
+        for i, (mask, box, conf) in enumerate(zip(masks, boxes, confidences)):
+            mask_resized = cv2.resize(mask, (w, h))
+            mask_area = np.sum(mask_resized > 0.5)
+            area_ratio = mask_area / (w * h)
+
+            if area_ratio < 0.005 or area_ratio > 0.85:
+                continue
+
+            detections.append({
+                'mask': mask_resized,
+                'bbox': box,
+                'confidence': conf,
+                'area_ratio': area_ratio
+            })
+
+        filtered_detections = filter_background_objects(
+            detections, original_image.shape)
+
+        if filtered_detections:
+            best_detection = select_best_object(
+                filtered_detections, original_image.shape)
+            if best_detection:
+                mask_binary = (best_detection['mask'] > 0.5).astype(
+                    np.uint8) * 255
+                return original_image, mask_binary
+
+    return None, None
+
+
+def segment_images_for_photogrammetry_improved(input_folder, output_folder_segmented, output_folder_mask, model_path):
+    import os
+    import shutil
+    from tqdm import tqdm
+
+    if os.path.exists(output_folder_segmented):
+        shutil.rmtree(output_folder_segmented)
+    if os.path.exists(output_folder_mask):
+        shutil.rmtree(output_folder_mask)
+
+    os.makedirs(output_folder_segmented, exist_ok=True)
+    os.makedirs(output_folder_mask, exist_ok=True)
+
+    model = YOLO(model_path)
+
+    image_files = [f for f in os.listdir(input_folder)
+                   if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+
+    segmented_paths = []
+    mask_paths = []
+
+    for image_file in tqdm(image_files, desc="Segmentando objetos"):
+        image_path = os.path.join(input_folder, image_file)
+
+        segmented_image, mask = segment_single_object_adaptive(
+            image_path, model)
+
+        if segmented_image is not None and mask is not None:
+            mask_3d = cv2.merge([mask, mask, mask])
+            segmented_result = cv2.bitwise_and(segmented_image, mask_3d)
+
+            base_name = os.path.splitext(image_file)[0]
+
+            segmented_output_path = os.path.join(
+                output_folder_segmented, f"{base_name}_seg.jpg")
+            mask_output_path = os.path.join(
+                output_folder_mask, f"{base_name}_mask.jpg")
+
+            cv2.imwrite(segmented_output_path, segmented_result)
+            cv2.imwrite(mask_output_path, mask)
+
+            segmented_paths.append(segmented_output_path)
+            mask_paths.append(mask_output_path)
+
+    return segmented_paths, mask_paths
+
+
+def modify_upload_endpoint_segmentation():
+    return '''
+    if segment_objects:
+        try:
+            segmented_paths, mask_paths = segment_images_for_photogrammetry_improved(
+                input_folder="/data/images",
+                output_folder_segmented="/data/images_segmented", 
+                output_folder_mask="/data/images_masks",
+                model_path="/app/models/yolo11l-seg.pt"
+            )
+
+            if segmented_paths:
+                shutil.rmtree("/data/images")
+                os.rename("/data/images_segmented", "/data/images")
+                if os.path.exists("/data/images_masks"):
+                    shutil.rmtree("/data/images_masks")
+
+                segmentation_info = {
+                    "segmented": True,
+                    "segmented_images": len(segmented_paths),
+                    "original_images": len(copied_images)
+                }
+            else:
+                segmentation_info = {
+                    "segmented": False,
+                    "reason": "No se encontraron objetos válidos para segmentar",
+                    "fallback_to_original": True
+                }
+        except Exception as seg_error:
+            segmentation_info = {
+                "segmented": False,
+                "error": str(seg_error),
+                "fallback_to_original": True
+            }
+    '''
